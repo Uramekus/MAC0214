@@ -1,0 +1,48 @@
+Foi feita examinação e engenharia reversa no funcionamento dos chips RTL8168gu/8111gu, que tem documentação escassa na internet. O driver do plan9front não normalmente funcionava nesses chips, com isso foi elaborado um patch que aparentemente conserta o funcionamento invertendo a ordem de inicialização de uma parte do chip e bloqueia uma porta lógica utilizada para Wake On LAN. O patch foi baseado em observação do funcionamento no modo EFI PXE e depois confirmado pelo código fonte do driver do FreeBSD (6h)
+
+
+o Patch ainda não foi enviado pois está pendente checagem de outro modelo de chip compativel mas não o mesmo do que possuo:
+
+diff 216ecc546034247d9281462c605b4938971e9b98 uncommitted
+--- a//sys/src/9/pc/ether8169.c
++++ b//sys/src/9/pc/ether8169.c
+@@ -714,6 +714,7 @@
+ 	cplusc |= Txenb|Mulrw;
+ 	switch(ctlr->macv){
+ 	case Macv40:
++	case Macv42:
+ 	case Macv44:
+ 	case Macv51:
+ 		cplusc |= Macstatdis;
+@@ -732,7 +733,16 @@
+ 	csr32w(ctlr, Rdsar+4, pa>>32);
+ 	csr32w(ctlr, Rdsar, pa);
+ 
+-	csr8w(ctlr, Cr, Te|Re);
++	/* pre-RTL8168G controllers need early TX/RX before configuration */
++	switch(ctlr->macv){
++	case Macv42:
++		/* RXDV gating */
++		i = csr32r(ctlr, 0x00F0);
++		csr32w(ctlr, 0x00F0, i&~0x00080000);
++		break;
++	default:
++		csr8w(ctlr, Cr, Te|Re);
++	}
+ 
+ 	csr32w(ctlr, Tcr, Ifg1|Ifg0|Mtxdmaunlimited);
+ 	ctlr->tcr = csr32r(ctlr, Tcr);
+@@ -769,6 +779,12 @@
+ 
+ 	csr32w(ctlr, Mpc, 0);
+ 
++	switch(ctlr->macv){
++	case Macv42:
++		csr8w(ctlr, Cr, Te|Re);
++	default:
++		break;
++	}
+ 	iunlock(ctlr);
+ }
+
+
