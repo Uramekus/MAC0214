@@ -1,5 +1,6 @@
 Foi feita examinação e engenharia reversa no funcionamento dos chips RTL8168gu/8111gu, que tem documentação escassa na internet. O driver do plan9front não normalmente funcionava nesses chips, com isso foi elaborado um patch que aparentemente conserta o funcionamento invertendo a ordem de inicialização de uma parte do chip e bloqueia uma porta lógica utilizada para Wake On LAN. O patch foi baseado em observação do funcionamento no modo EFI PXE e depois confirmado pelo código fonte do driver do FreeBSD (6h)
 
+Também tinha sido feito o preliminar do drawterm, que não conseguia ser construido pra android por padrão + tentativas de atualizar a API (3h)
 
 o Patch ainda não foi enviado pois está pendente checagem de outro modelo de chip compativel mas não o mesmo do que possuo:
 
