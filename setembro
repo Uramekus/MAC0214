@@ -1,0 +1,5 @@
+drawterm(~12h):
+atualizado de-facto o tooling do drawterm(d8 vs apksigner e usar declaracoes novas)
+mudar os temas pra usar o mais novo atual do dispositivo, utilizar API nova de notificacoes,
+e lutando com um bug muito misterioso com a finalização de uma sessão e o linking da JVM + rebase pra ter algum merge depois
+
