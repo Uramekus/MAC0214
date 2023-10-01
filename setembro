@@ -1,5 +1,463 @@
-drawterm(~12h):
+drawterm(12h):
 atualizado de-facto o tooling do drawterm(d8 vs apksigner e usar declaracoes novas)
 mudar os temas pra usar o mais novo atual do dispositivo, utilizar API nova de notificacoes,
 e lutando com um bug muito misterioso com a finalização de uma sessão e o linking da JVM + rebase pra ter algum merge depois
 
+
+igfx(16h):
+Na ultima semana abandonei o drawterm depois de enviar os patches pra um maintainer que disse que iria revisar depois e comecei a ler os manuais da intel em https://www.intel.com/content/www/us/en/docs/graphics-for-linux/developer-reference/1-0/overview.html
+ e incrementalmente testei modificações baseado no codigo antigo da arquitetura Haswell que já estava disponivel e parcialmente funcionando (o que é adequado visto que parte da estrutura de video foi preservada segundo a documentação, porem todo sistema de clocks mudou) (13/16h)
+
+codigo original em: http://git.9front.org/plan9front/plan9front/a327175a3c01d18e3e4c061ce4579cc420ee3561/sys/src/cmd/aux/vga/igfx.c/f.html
+
+OBS: há muitas limitações no teste de hardware, dependo estritamente da mesma maquina para programar e carregar o código
+ cada teste depende de um reboot completo e as vezes até mesmo é dependente de bootar em outro sistema operacional para medir a diferença de registradores,
+ então em efetivo acabo gastando muito mais tempo para testar mudanças pequenas que tem um feedback menor, logo resolvi replanear o que fazer e primeiro testar um sistema de time-sharing emulador de placa de vídeo oficial da intel (gvt-g) 
+
+
+Após configurar o gvt-g e ter problemas nele que não tive no hardware de verdade, acabei notando que o emulador no kernel linux acaba fazendo mais passos de validação da sequencia de inicialização de hardware que o hardware acaba não reclamando.
+Logo, resolvi focar no gvt-g até ele parar de reclamar que a sequencia de inicialização do driver de vídeo está incorreta, isso acabou tendo um feedback melhor pois consigo ler parte da maquina de estados no kernel linux em 
+/linux/drivers/gpu/drm/i915/gvt/*  e com isso identifiquei um problema na sequencia de edid, que culmina na primeira invocação de dpauxio estar errada(no meu lado do codigo)
+
+Mas o feedback não está sendo o suficiente e disso deverei recompilar o kernel linux com mais comandos de imprimir colocadas manualmente
+(3h/16h)
+
+
+
+diff atual do código do igfx abaixo:
+
+diff 61f4c085c402af665b436f6d010d61107551d8a3 uncommitted
+--- a//sys/src/cmd/aux/vga/igfx.c
++++ b//sys/src/cmd/aux/vga/igfx.c
+@@ -25,8 +25,12 @@
+ 	TypeG45,
+ 	TypeILK,		/* Iron Lake */
+ 	TypeSNB,		/* Sandy Bridge (unfinished) */
+-	TypeIVB,		/* Ivy Bridge */
+-	TypeHSW,		/* Haswell */
++	TypeIVB,		/* Ivy Bridge: gen 7 */
++	TypeHSW,		/* Haswell: gen 7.5 */
++	TypeBDW,		/* Broadwell, Braswell: Gen 8 */
++	TypeSKL,		/* Skylake, Apollo lake Gen9, should work on 9.5, except on broxton */
++	TypeBXT,		/* Broxton seems to have almost the same display engine as gen 11 */
++	/* TypeKBL,		 Gen 9.5: a shitton of arches until Gemini */
+ };
+ 
+ enum {
+@@ -151,6 +155,10 @@
+ 
+ 	int	type;
+ 	int	cdclk;		/* core display clock in mhz */
++	int vco;
++	int refclk;
++	int bypass;
++	
+ 
+ 	int	npipe;
+ 	Pipe	pipe[4];
+@@ -268,6 +276,7 @@
+ 		t->lm[1] = snarfreg(igfx, o + 0x48);
+ 		t->ln[1] = snarfreg(igfx, o + 0x4c);
+ 		break;
++	case TypeSKL:
+ 	case TypeHSW:
+ 		t->dm[0] = snarfreg(igfx, o + 0x30);
+ 		t->dn[0] = snarfreg(igfx, o + 0x34);
+@@ -294,10 +303,11 @@
+ 	o = x == 3 ? 0x6F000 : 0x60000 + x*0x1000;
+ 	snarftrans(igfx, p, o);
+ 
+-	if(igfx->type != TypeHSW || x != 3)
++	if((igfx->type < TypeHSW) || x != 3)
+ 		p->src = snarfreg(igfx, o + 0x0001C);
+ 
+ 	switch(igfx->type){
++	case TypeSKL:
+ 	case TypeHSW:
+ 		p->dpctl = snarfreg(igfx, o + 0x400);	/* PIPE_DDI_FUNC_CTL_x */
+ 		p->dpll = &igfx->dpll[0];
+@@ -342,7 +352,7 @@
+ 	p->dsp->stride		= snarfreg(igfx, 0x70188 + x*0x1000);
+ 	p->dsp->tileoff		= snarfreg(igfx, 0x701A4 + x*0x1000);
+ 	p->dsp->surf		= snarfreg(igfx, 0x7019C + x*0x1000);
+-	if(igfx->type == TypeHSW)
++	if(igfx->type >= TypeHSW)
+ 		p->dsp->leftsurf = snarfreg(igfx, 0x701B0 + x*0x1000);
+ 
+ 	/* cursor plane */
+@@ -349,6 +359,7 @@
+ 	switch(igfx->type){
+ 	case TypeIVB:
+ 	case TypeHSW:
++	case TypeSKL:
+ 		p->cur->cntr	= snarfreg(igfx, 0x70080 + x*0x1000);
+ 		p->cur->base	= snarfreg(igfx, 0x70084 + x*0x1000);
+ 		p->cur->pos	= snarfreg(igfx, 0x70088 + x*0x1000);
+@@ -372,6 +383,8 @@
+ 	if(igfx->pci->vid != 0x8086)
+ 		return -1;
+ 	switch(igfx->pci->did){
++	case 0x9bc4:
++		return TypeSKL;
+ 	case 0x1616:	/* HD 5500 - 5th Gen Core (ULT) */
+ 	case 0x0a16:	/* HD 4400 - 4th Gen Core (ULT) */
+ 		igfx->isult = 1;
+@@ -411,6 +424,7 @@
+ {
+ 	Igfx *igfx;
+ 	int x, y;
++	Reg cdctl, tmp;
+ 
+ 	igfx = vga->private;
+ 	if(igfx == nil) {
+@@ -526,7 +540,7 @@
+ 		igfx->cdclk = igfx->isult ? 450 : 540;	/* MHz */
+ 		if(igfx->pci->did == 0x1616)
+ 			igfx->cdclk = 540;
+-
++		
+ 		igfx->dpll[0].ctrl	= snarfreg(igfx, 0x130040);	/* LCPLL_CTL */
+ 		igfx->dpll[1].ctrl	= snarfreg(igfx, 0x46040);	/* WRPLL_CTL1 */
+ 		igfx->dpll[2].ctrl	= snarfreg(igfx, 0x46060);	/* WRPLL_CTL2 */
+@@ -543,7 +557,101 @@
+ 				igfx->dp[x].buftrans[y]	= snarfreg(igfx, 0x64E00 + 0x60*x + 4*y);
+ 			igfx->dpllsel[x]	= snarfreg(igfx, 0x46100 + 4*x);
+ 		}
++		goto PCHcommon;
++	case TypeSKL:
++		igfx->npipe = 4;
++		tmp = snarfreg(igfx, 0x46010); // LCPLL1_CTL sets dppl0
+ 
++		/* page 127 */
++		igfx->dpll[0].ctrl	= snarfreg(igfx, 0x46010);	/* LCPLL1_CTL */
++		igfx->dpll[1].ctrl	= snarfreg(igfx, 0x46014);	/* LCPLL2_CTL */
++		igfx->dpll[2].ctrl	= snarfreg(igfx, 0x46040);	/* WRPLL_CTL1, might be DPLL1_CFGCR1 */
++		igfx->dpll[3].ctrl	= snarfreg(igfx, 0x46060);	/* WRPLL_CTL2, might be DPLL1_CFGCR2 */
++
++
++		for(x=0; x<nelem(igfx->dp); x++){ // There's a DDI D now.
++			igfx->dp[x].bufctl 	= snarfreg(igfx, 0x64000 + 0x100*x);
++			igfx->dp[x].ctl 	= snarfreg(igfx, 0x64040 + 0x100*x);
++			if(x > 0)
++				igfx->dp[x].stat	= snarfreg(igfx, 0x64044 + 0x100*x);
++			for(y=0; y<nelem(igfx->dp[x].buftrans); y++)
++				igfx->dp[x].buftrans[y]	= snarfreg(igfx, 0x64E00 + 0x60*x + 4*y);
++			igfx->dpllsel[x]	= snarfreg(igfx, 0x46100 + 4*x);
++		}
++
++		/*
++			Relevant clocks according to manual pg 127:
++			CDCLK_CTL
++			LCPLL1_CTL
++			LCPLL2_CTL
++			WRPLL_CTL
++			PORT_CLK_SEL
++			TRANS_CLK_SEL
++			DPLL_CTRL1
++			DPLL_CTRL2
++			DPLL_STATUS
++			DPLL_CFGCR1
++			DPLL_CFGCR2
++			TIMESTAMP_CTR
++		*/
++
++		igfx->refclk = 240;
++		igfx->vco = 0;
++		if((tmp.v & (1 <<31)) == 0)
++			goto Meme;
++		if(tmp.v & (1<<30) == 0)
++			goto Meme;
++
++		tmp = snarfreg(igfx, 0x6C058); // DPLL_CTRL1
++
++		switch(tmp.v & (7 << ((0) * 6 + 1))){
++			case (7 << ((0) * 6 + 1)):
++			case (7 << ((1) * 6 + 1)):
++			case (7 << ((2) * 6 + 1)):
++			case (7 << ((3) * 6 + 1)):
++				igfx->vco = 8100;
++				break;
++			case (7 << ((4) * 6 + 1)):
++			case (7 << ((5) * 6 + 1)):
++				igfx->vco = 8640;
++			default:
++				break;
++		}
++		igfx->cdclk = igfx->bypass = igfx->refclk;
++
++		if(igfx->vco == 0)
++			goto Avoid;
++
++		Meme:
++		cdctl = snarfreg(igfx, 0x46000); // CDCLK_CTL
++
++		/* 
++			This should switch on cdctcl.v & 0xc000000 on both if and else probably.
++			linux seems to provide 4 clock options
++			but i've only identified 2 of them being used. 
++			Mine generally reports 337500 kHz but thats on a eDP panel,
++			But it seems 450 MHz may work.
++
++			manual page 129:
++		*/
++		if(igfx->vco == 8640) {
++			igfx->cdclk = 540;
++			//igfx->cdclk = 432;
++		} else {
++			switch(cdctl.v & 0xc000000){
++				case 0:
++				igfx->cdclk = 450;
++				break;
++
++				default:
++				igfx->cdclk = 337; //337.5 actually, must change everything else to use kHz
++
++				break;
++
++			}
++		}
++		Avoid:
++
+ 		goto PCHcommon;
+ 
+ 	PCHcommon:
+@@ -568,7 +676,7 @@
+ 		}
+ 
+ 		for(x=0; x<igfx->npipe; x++){
+-			if(igfx->type == TypeHSW && x == 3){
++			if((igfx->type >= TypeHSW) && x == 3){
+ 				igfx->pipe[x].pfit = &igfx->pfit[0];
+ 				continue;
+ 			}
+@@ -597,9 +705,8 @@
+ 	for(x=0; x<igfx->npipe; x++)
+ 		snarfpipe(igfx, x);
+ 
+-	for(x=0; x<nelem(vga->edid); x++){
++	for(x=0; x<nelem(vga->edid); x++){ // 0..7
+ 		Modelist *l;
+-
+ 		switch(x){
+ 		case PortVGA:
+ 			vga->edid[x] = snarfgmedid(igfx, 2, 0x50);
+@@ -612,7 +719,7 @@
+ 				l->attr = mkattr(l->attr, "lcd", "1");
+ 			break;
+ 		case PortDPD:
+-			if(igfx->type == TypeHSW && igfx->isult)
++			if((igfx->type >= TypeHSW) && igfx->isult)
+ 				continue;
+ 		case PortDPA:
+ 		case PortDPB:
+@@ -825,6 +932,7 @@
+ 		dpll->ctrl.v &= ~(7<<13);
+ 		dpll->ctrl.v |= (port == PortLCD ? 3 : 0) << 13;
+ 		break;
++	case TypeSKL:
+ 	case TypeHSW:
+ 		/* select port clock to pipe */
+ 		igfx->pipe[x].clksel.v = port+1-PortDPA<<29;
+@@ -852,6 +960,7 @@
+ 			dpll->ctrl.v &= ~(1<<31) & ~(1<<28) & ~(1<<26);
+ 		}
+ 		return 0;
++
+ 	default:
+ 		return -1;
+ 	}
+@@ -1037,7 +1146,7 @@
+ 		fdi->rxtu[0].v = (tu-1)<<25;
+ 		fdi->rxtu[1].v = (tu-1)<<25;
+ 		initdatalinkmn(fdi, m->frequency, 270*MHz, lanes, tu, 3*bpc);
+-	}else if(igfx->type == TypeHSW){
++	}else if((igfx->type >= TypeHSW)){
+ 		p->dpctl.v &= 0xf773733e;	/* mbz */
+ 		/* transcoder enable */
+ 		p->dpctl.v |= 1<<31;
+@@ -1068,7 +1177,7 @@
+ 	/* bits per color for cpu pipe */
+ 	for(i=0; i<nelem(bpctab); i++){
+ 		if(bpctab[i] == bpc){
+-			if(igfx->type == TypeHSW){
++			if((igfx->type >= TypeHSW)){
+ 				p->dpctl.v &= ~(7<<20);
+ 				p->dpctl.v |= i<<20;
+ 			}else{
+@@ -1106,7 +1215,7 @@
+ 	igfx->adpa.v &= ~(1<<31);
+ 	if(igfx->type == TypeG45)
+ 		igfx->adpa.v |= (3<<10);	/* Monitor DPMS: off */
+-	if(igfx->type == TypeHSW){
++	if((igfx->type >= TypeHSW)){
+ 		for(x=1; x<nelem(igfx->dpll); x++)
+ 			igfx->dpll[x].ctrl.v &= ~(1<<31);
+ 		for(x=0; x<nelem(igfx->dpllsel); x++)
+@@ -1122,7 +1231,7 @@
+ 		/* disable displayport transcoders */
+ 		igfx->pipe[x].dpctl.v &= ~(1<<31);
+ 		igfx->pipe[x].fdi->dpctl.v &= ~(1<<31);
+-		if(igfx->type == TypeHSW){
++		if((igfx->type >= TypeHSW)){
+ 			igfx->pipe[x].dpctl.v &= ~(7<<28);
+ 			igfx->pipe[x].fdi->dpctl.v &= ~(7<<28);
+ 		}else{
+@@ -1151,7 +1260,7 @@
+ 		break;
+ 
+ 	case PortVGA:
+-		if(igfx->type == TypeHSW)	/* unimplemented */
++		if((igfx->type >= TypeHSW))	/* unimplemented */
+ 			goto Badport;
+ 		if(igfx->type == TypeG45)
+ 			x = (igfx->adpa.v >> 30) & 1;
+@@ -1171,7 +1280,7 @@
+ 		break;
+ 
+ 	case PortLCD:
+-		if(igfx->type == TypeHSW)
++		if((igfx->type >= TypeHSW))
+ 			goto Badport;
+ 		if(igfx->type == TypeG45 || igfx->type == TypeILK)
+ 			x = (igfx->lvds.v >> 30) & 1;
+@@ -1206,7 +1315,7 @@
+ 		/* use PIPE_A for displayport */
+ 		x = 0;
+ 
+-		if(igfx->type == TypeHSW){
++		if((igfx->type >= TypeHSW)){
+ 			if(port == PortDPA){
+ 				int c;
+ 
+@@ -1378,7 +1487,7 @@
+ 	loadreg(igfx, t->lm[1]);
+ 	loadreg(igfx, t->ln[1]);
+ 
+-	if(t->dpll != nil && igfx->type != TypeHSW){
++	if(t->dpll != nil && (igfx->type < TypeHSW)){
+ 		/* program dpll */
+ 		t->dpll->ctrl.v &= ~(1<<31);
+ 		loadreg(igfx, t->dpll->ctrl);
+@@ -1564,7 +1673,7 @@
+ 	int i;
+ 
+ 	/* disable displayport transcoder */
+-	if(igfx->type == TypeHSW){
++	if((igfx->type >= TypeHSW)){
+ 		csr(igfx, t->dpctl.a, 15<<28, 0);
+ 		csr(igfx, t->ht.a, ~0, 0);
+ 		csr(igfx, t->hb.a, ~0, 0);
+@@ -1590,7 +1699,7 @@
+ 	csr(igfx, t->clksel.a, 7<<29, 0);
+ 
+ 	/* disable dpll  */
+-	if(igfx->type != TypeHSW && t->dpll != nil)
++	if((igfx->type < TypeHSW) && t->dpll != nil)
+ 		csr(igfx, t->dpll->ctrl.a, 1<<31, 0);
+ }
+ 
+@@ -1605,7 +1714,7 @@
+ 	csr(igfx, p->dsp->cntr.a, 1<<31, 0);
+ 	wr(igfx, p->dsp->surf.a, 0);	/* arm */
+ 	/* cursor off */
+-	if(igfx->type == TypeHSW)
++	if((igfx->type >= TypeHSW))
+ 		csr(igfx, p->cur->cntr.a, 0x3F, 0);
+ 	else
+ 		csr(igfx, p->cur->cntr.a, 1<<5 | 7, 0);
+@@ -1631,7 +1740,7 @@
+ 	disabletrans(igfx, p->fdi);
+ 
+ 	/* disable pch dpll enable bit */
+-	if(igfx->type != TypeHSW)
++	if((igfx->type < TypeHSW))
+ 		csr(igfx, igfx->dpllsel[0].a, 8<<(x*4), 0);
+ }
+ 
+@@ -1767,7 +1876,7 @@
+ 		csr(igfx, igfx->pipe[0].conf.a, 0, 3<<18);
+ 	}
+ 
+-	if(igfx->type == TypeHSW){
++	if((igfx->type >= TypeHSW)){
+ 		/* deselect port clock */
+ 		for(x=0; x<nelem(igfx->dpllsel); x++)
+ 			csr(igfx, igfx->dpllsel[x].a, 0, 7<<29);
+@@ -1784,7 +1893,7 @@
+ 	loadreg(igfx, igfx->rawclkfreq);
+ 	loadreg(igfx, igfx->drefctl);
+ 	/* program cpu pll */
+-	if(igfx->type == TypeHSW)
++	if((igfx->type >= TypeHSW))
+ 		for(x=0; x<nelem(igfx->dpll); x++)
+ 			loadreg(igfx, igfx->dpll[x].ctrl);
+ 	sleep(10);
+@@ -1819,7 +1928,7 @@
+ 			loadreg(igfx, igfx->dp[x].buftrans[y]);
+ 		sleep(100);
+ 		loadreg(igfx, igfx->dp[x].bufctl);
+-		sleep(500);	/* needs to take a breath before training */
++		sleep(519);	/* DP Section 5.8d of skl manual specifies to take a > 518us breath before training */
+ 		if(enabledp(igfx, &igfx->dp[x]) < 0)
+ 			ctlr->flag |= Ferror;
+ 		if(!igfx->dp[x].hdmi){
+@@ -1965,7 +2074,7 @@
+ 	dumpreg(name, "fp0", dpll->fp0);
+ 	dumpreg(name, "fp1", dpll->fp1);
+ 
+-	if(igfx->type == TypeHSW)
++	if((igfx->type >= TypeHSW))
+ 		return;
+ 
+ 	p2 = ((dpll->ctrl.v >> 13) & 3) == 3 ? 14 : 10;
+@@ -2082,8 +2191,9 @@
+ 		sleep(5);
+ 	}
+ 
+-	/* clear sticky bits */
++	/* clear sticky bits 
+ 	wr(igfx, dp->auxctl.a, (1<<28) | (1<<25) | (1<<30));
++	*/
+ 
+ 	for(i=0; i<nelem(dp->auxdat); i++){
+ 		w  = buf[i*4+0]<<24;
+@@ -2113,6 +2223,7 @@
+ 	t = 0;
+ 	for(;;){
+ 		w = rr(igfx, dp->auxctl.a);
++		print("0x%uX\n", w);
+ 		if((w & (1<<30)) != 0)
+ 			break;
+ 		if(++t >= 10){
+@@ -2299,7 +2410,7 @@
+ 			break;
+ 	if(try >= 30)
+ 		trace("can\'t start training\n");
+-	w = dp->bufctl.v >> (igfx->type == TypeHSW ? 1 : 19) & 7;
++	w = dp->bufctl.v >> ((igfx->type >= TypeHSW) ? 1 : 19) & 7;
+ 	if(igfx->type == TypeIVB)
+ 		w = (dp->ctl.v >> 19) & 7;
+ 	trace("using %x lane(s)\n", w+1);
+@@ -2327,7 +2438,7 @@
+ 	if(trainpatt(igfx, dp, w, rd, 0x8, 0x7, 0xc))
+ 		return -1;
+ 
+-	if(igfx->type == TypeHSW){
++	if((igfx->type >= TypeHSW)){
+ 		/* set link training to idle pattern and wait for 5 idle
+ 		 * patterns */
+ 		trace("idle pattern\n");
+@@ -2354,9 +2465,11 @@
+ 	Edid *e;
+ 
+ 	for(i=0; i<sizeof(dp->dpcd); i+=16)
+-		if(dpauxtra(igfx, dp, CmdNative|CmdRead, i, dp->dpcd+i, 16) != 16)
++		if(dpauxtra(igfx, dp, CmdNative|CmdRead, i, dp->dpcd+i, 16) != 16){
++			print("fails on %d\n",i);
+ 			return nil;
+-
++		}
++	print("this should run\n");
+ 	if(dp->dpcd[0] == 0)	/* nothing there, dont try to get edid */
+ 		return nil;
+ 
