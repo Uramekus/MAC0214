@@ -13,4 +13,6 @@ Com isso entendi que a maquina de estados criada pelo kernel do gvt-g tem um bug
 
 # Mudanças no Driver
 
-Agora, da parte do driver em si o que acabou me assustando muito é o quanto mudou e o quanto acabou ficando parecido ao que esixtia antigmaente mas mudou em detalhas de uma forma que acaba mais atrapalhando que ajudando 
+Agora, da parte do driver em si o que acabou me assustando muito é o quanto mudou e o quanto acabou ficando parecido ao que esixtia antigmaente mas mudou em detalhas de uma forma que acaba mais atrapalhando que ajudando, tinha uma noção muito primitiva do que realmente seria necessário para fazer o hardware funcionar pois o documento da Intel dava passos "simples" que estavam todos sendo feitos, mas existiam problemas nos detalhes de cada um dos passos que o impedia de funcionar de um jeito esperado, resultando sempre em uma tela preta
+
+
