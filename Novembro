@@ -1,0 +1,16 @@
+No mês de novembro tive muito progresso, conseguindo deixar o meu código completamente funcional, porém o código ainda possui problemas e faltam testes em outro tipo de hardware.
+
+
+# Rework
+
+  Acabei notando que talvez precisaria ligar todos os portões lógicos que controlam a energia distribuida ao controlador de vídeo, e com isso liguqi todos por padrão.
+
+
+# Uma história envolvendo DisplayPort, um standard de comitê
+
+
+Após fazer um rework da partes de clock no começo do programa, acabava tendo outro problema:  a tela piscava, e ficava alguns milissegundos em um modo estranho, e logo depois parava de funcionar.
+
+Depois de investigar um pouco as possiblidades (questões de numeros de clock errado, talvez apontando pra um Pipe diferente do que deveria ser apontado internamente, etc) acabei notando que o problema que tinha ali era relacionado a negociação do link do padrão DisplayPort, o que acabou sendo um problema no começo até ter que ler o código do Linux por falta de alternativas.
+
+Acontece que os sinais que mandamos nos nossos computadores digitais não são realmente digitais, eles vem de ondas analógicas que tentam ser moduladas para serem interpretadas digitalmente, e que na realidade são [ondas curvas](https://en.wikipedia.org/wiki/Eye_pattern), e  isso demanda que além de todos os problemas físicos de sincronização de relógios que podemos ter, existe a questão dos sinais serem elétricos e ter niveis aceitaveis de tensão que os sinais podem variar (dependendo da frequencia os níveis de tensão precisam serem mais rígidos, já que se tem menos tempo para saber com certeza o estado desse sinal.), acontece que a Intel tem um conjunto de 20 registradores que fazem a negociação do DisplayPort sobre o quão rigido vão ser esses timings, e esses registradores acabam não só variando de arquitetura para arquitetura, mas também de modelo a modelo, o que me gerou confusão visto que tinha previamente modificado o código para registrar uma especificação da potencia de linha adequada para operação. 
